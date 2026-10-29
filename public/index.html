@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Briefing Comercial Sencia</title>
+<title>Briefing Hogar Sencia</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Italiana&family=Figtree:wght@400;500;600&display=swap">
 <style>
 :root{
@@ -67,9 +67,9 @@ footer{margin-top:40px;font-size:12px;color:var(--muted);letter-spacing:.04em}
 <div class="wrap">
   <header>
     <div class="brand">Sencia<small>ESTUDIO DE DISEÑO INTERIOR</small></div>
-    <h1>Briefing para tu proyecto comercial</h1>
-    <p class="intro">Antes de diseñar queremos entender tu negocio, tu cliente y el espacio. Responde con calma y con tus propias palabras: no hay respuestas correctas, y si algo no lo sabes todavía, déjalo en blanco.</p>
-    <div class="meta"><span>8 secciones</span><span>15 a 20 minutos</span><span>Tus respuestas se guardan en este dispositivo mientras escribes</span></div>
+    <h1>Briefing para tu hogar</h1>
+    <p class="intro">Un buen diseño empieza por conocer a quienes van a vivir el espacio: sus rutinas, sus gustos y lo que hoy no les funciona. Responde con calma y con tus propias palabras. Si algo no lo sabes todavía, déjalo en blanco.</p>
+    <div class="meta"><span>9 secciones</span><span>20 a 25 minutos</span><span>Tus respuestas se guardan en este dispositivo mientras escribes</span></div>
   </header>
 
   <div id="formArea">
@@ -100,7 +100,7 @@ footer{margin-top:40px;font-size:12px;color:var(--muted);letter-spacing:.04em}
 
 <script src="/questions.js"></script>
 <script>
-const KEY="sencia-briefing-comercial-v1";
+const KEY="sencia-briefing-hogar-v1";
 const f=document.getElementById("f");
 const msg=document.getElementById("msg");
 const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -180,8 +180,8 @@ async function mostrarGracias(id){
   try{
     const c=await (await fetch("/api/config")).json();
     if(c.whatsapp){
-      const marca=document.getElementById("marca").value.trim();
-      const texto=`Hola, acabo de enviar el briefing de ${marca||"mi negocio"} (ref. #${id}). Quedo atento.`;
+      const nom=document.getElementById("nombre").value.trim();
+      const texto=`Hola, acabo de enviar el briefing de ${nom||"mi hogar"} (ref. #${id}). Quedo atento.`;
       const a=document.getElementById("wa");
       a.href=`https://wa.me/${c.whatsapp}?text=${encodeURIComponent(texto)}`;
       a.hidden=false;

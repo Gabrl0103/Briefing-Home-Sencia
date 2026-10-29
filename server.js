@@ -2,6 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const path = require("path");
 const { Pool } = require("pg");
+const PDFDocument = require("pdfkit");
 const S = require("./public/questions.js");
 
 const all = S.flatMap(s => s.q);
@@ -76,6 +77,68 @@ ${cuerpo}</div></body></html>`;
 
 const tag = e => `<span class="tag${e === "Nuevo" ? " n" : ""}">${esc(e)}</span>`;
 
+// ---------- Exportar un briefing (CSV y PDF) ----------
+const celda = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
+
+function nombreArchivo(datos, id, ext) {
+  const slug = String(datos.nombre || "briefing").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "briefing";
+  return `briefing-${slug}-${id}.${ext}`;
+}
+
+function csvUno(id, creado, estado, datos) {
+  const filas = [["Sección", "Pregunta", "Respuesta"],
+    ["Registro", "Ref.", "#" + id], ["Registro", "Fecha", fecha(creado)], ["Registro", "Estado", estado]];
+  S.forEach(s => s.q.forEach(q => filas.push([s.t, q.l, (datos[q.id] || "").trim()])));
+  return "﻿" + filas.map(f => f.map(celda).join(",")).join("\r\n");
+}
+
+// El PDF usa fuentes estándar: se quitan los caracteres que no soportan (emojis, etc.)
+const pdfOk = s => String(s ?? "").replace(/[  ]/g, " ").replace(/\r/g, "")
+  .replace(/[^\n -~ -ÿ–—‘’“”•…€]/g, "");
+
+function crearPdf(id, creado, estado, datos) {
+  const ACC = "#3E5A4C", MUT = "#626A60", INK = "#20251F", LINE = "#D3D6CE";
+  const M = 56;
+  const doc = new PDFDocument({
+    size: "A4", bufferPages: true,
+    margins: { top: M, bottom: 64, left: M, right: M },
+    info: { Title: pdfOk(`Briefing ${datos.nombre || id}`), Author: "Sencia Estudio" },
+  });
+  doc.font("Helvetica").fontSize(9).fillColor(ACC).text("SENCIA · ESTUDIO DE DISEÑO INTERIOR", { characterSpacing: 2 });
+  doc.moveDown(1.2).font("Times-Roman").fontSize(26).fillColor(INK).text(pdfOk(datos.nombre || "Briefing"));
+  doc.moveDown(0.3).font("Helvetica").fontSize(10).fillColor(MUT)
+    .text(pdfOk(`Briefing hogar #${id} · ${fecha(creado)} · Estado: ${estado}`));
+  S.forEach((s, i) => {
+    if (doc.y > doc.page.height - 160) doc.addPage();
+    doc.moveDown(1.6).font("Times-Roman").fontSize(16).fillColor(INK).text(`${String(i + 1).padStart(2, "0")}   ${pdfOk(s.t)}`);
+    const y = doc.y + 3;
+    doc.moveTo(M, y).lineTo(doc.page.width - M, y).lineWidth(0.7).strokeColor(LINE).stroke();
+    doc.moveDown(0.7);
+    s.q.forEach(q => {
+      const v = (datos[q.id] || "").trim();
+      if (doc.y > doc.page.height - 110) doc.addPage();
+      doc.font("Helvetica").fontSize(8.5).fillColor(MUT).text(pdfOk(q.l));
+      doc.font("Helvetica").fontSize(11).fillColor(v ? INK : MUT).text(v ? pdfOk(v) : "—");
+      doc.moveDown(0.6);
+    });
+  });
+  const rango = doc.bufferedPageRange();
+  for (let i = 0; i < rango.count; i++) {
+    doc.switchToPage(i);
+    doc.page.margins.bottom = 0; // para poder escribir el pie sin que cree otra página
+    doc.font("Helvetica").fontSize(8).fillColor(MUT).text(
+      `Sencia Estudio · Briefing #${id} · Página ${i + 1} de ${rango.count}`,
+      M, doc.page.height - 40, { align: "center", width: doc.page.width - 2 * M, lineBreak: false });
+  }
+  return doc;
+}
+
+async function cargarBriefing(id) {
+  const r = await pool.query("SELECT id, creado, estado, datos FROM respuestas WHERE id=$1", [id]);
+  return r.rows[0] || null;
+}
+
 // ---------- Avisos automáticos (correo y WhatsApp) ----------
 function correoHtml(id, datos, link) {
   const secciones = S.map((s, i) => {
@@ -89,9 +152,9 @@ function correoHtml(id, datos, link) {
       <table style="width:100%;border-collapse:collapse;font-size:14px">${filas}</table>`;
   }).join("");
   return `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;color:#20251F;line-height:1.5">
-    <p style="letter-spacing:.3em;text-transform:uppercase;font-size:13px;margin:0">Sencia · Briefing comercial</p>
-    <h2 style="font-family:Georgia,serif;font-weight:400;font-size:28px;margin:12px 0 4px">${esc(datos.marca)}</h2>
-    <p style="color:#626A60;margin:0 0 16px">Briefing #${id} · ${esc(datos.nombre)} · ${esc(datos.tel)}</p>
+    <p style="letter-spacing:.3em;text-transform:uppercase;font-size:13px;margin:0">Sencia · Briefing para el hogar</p>
+    <h2 style="font-family:Georgia,serif;font-weight:400;font-size:28px;margin:12px 0 4px">${esc(datos.nombre)}</h2>
+    <p style="color:#626A60;margin:0 0 16px">Briefing #${id} · ${esc(datos.tel)}</p>
     ${link ? `<p><a href="${esc(link)}" style="display:inline-block;background:#3E5A4C;color:#F4F6F1;padding:10px 16px;border-radius:4px;text-decoration:none;font-weight:600">Abrir en el panel</a></p>` : ""}
     ${secciones}</div>`;
 }
@@ -105,7 +168,7 @@ async function enviarCorreo(id, datos, link) {
     body: JSON.stringify({
       from: process.env.EMAIL_FROM || "Briefing Sencia <onboarding@resend.dev>",
       to: para.split(",").map(s => s.trim()).filter(Boolean),
-      subject: `Nuevo briefing: ${datos.marca} (#${id})`,
+      subject: `Nuevo briefing: ${datos.nombre} (#${id})`,
       html: correoHtml(id, datos, link),
     }),
     signal: AbortSignal.timeout(10000),
@@ -118,7 +181,7 @@ async function enviarWhatsapp(id, datos) {
   const key = process.env.CALLMEBOT_APIKEY;
   const num = (process.env.WHATSAPP_NUMBER || "").replace(/\D/g, "");
   if (!key || !num) return;
-  const texto = `Nuevo briefing #${id}: ${datos.marca} (${datos.nombre}). Revisa tu correo o tu panel para ver las respuestas.`;
+  const texto = `Nuevo briefing de hogar #${id}: ${datos.nombre}. Revisa tu correo o tu panel para ver las respuestas.`;
   const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent("+" + num)}&text=${encodeURIComponent(texto)}&apikey=${encodeURIComponent(key)}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!r.ok) console.error("CallMeBot falló:", r.status, await r.text());
@@ -198,7 +261,7 @@ panel.get("/", async (req, res) => {
     const cond = [], args = [];
     if (q) {
       args.push("%" + q.replace(/[\\%_]/g, "\\$&") + "%");
-      cond.push(`(datos->>'marca' ILIKE $${args.length} OR datos->>'nombre' ILIKE $${args.length} OR datos->>'correo' ILIKE $${args.length})`);
+      cond.push(`(datos->>'nombre' ILIKE $${args.length} OR datos->>'correo' ILIKE $${args.length} OR datos->>'barrio' ILIKE $${args.length})`);
     }
     if (estado) { args.push(estado); cond.push(`estado = $${args.length}`); }
     const donde = cond.length ? "WHERE " + cond.join(" AND ") : "";
@@ -208,8 +271,8 @@ panel.get("/", async (req, res) => {
       `SELECT id, creado, estado, datos FROM respuestas ${donde} ORDER BY id DESC LIMIT ${POR_PAGINA} OFFSET ${(pagina - 1) * POR_PAGINA}`, args);
     const filas = r.rows.map(x => `<tr>
       <td>#${x.id}</td><td>${esc(fecha(x.creado))}</td>
-      <td><a href="${esc(base)}/${x.id}">${esc(x.datos.marca || "—")}</a></td>
-      <td>${esc(x.datos.nombre)}<br><span class="muted">${esc(x.datos.tel)}</span></td>
+      <td><a href="${esc(base)}/${x.id}">${esc(x.datos.nombre || "—")}</a></td>
+      <td>${esc(x.datos.tel)}<br><span class="muted">${esc(x.datos.correo || x.datos.ciudad || "")}</span></td>
       <td>${esc(x.datos.presupuesto || "—")}</td><td>${tag(x.estado)}</td></tr>`).join("");
     const enlace = n => `${base}?page=${n}${q ? "&q=" + encodeURIComponent(q) : ""}${estado ? "&estado=" + encodeURIComponent(estado) : ""}`;
     const nav = paginas > 1 ? `<p class="muted">Página ${pagina} de ${paginas} ·
@@ -218,14 +281,14 @@ panel.get("/", async (req, res) => {
     res.send(page("Briefings", `
       <h1>Briefings recibidos</h1>
       <form method="get" action="${esc(base)}" class="acciones">
-        <input class="campo" name="q" value="${esc(q)}" placeholder="Buscar por negocio, nombre o correo" style="flex:1;min-width:200px">
+        <input class="campo" name="q" value="${esc(q)}" placeholder="Buscar por nombre, correo o barrio" style="flex:1;min-width:200px">
         <select class="campo" name="estado"><option value="">Todos los estados</option>
           ${ESTADOS.map(e => `<option${e === estado ? " selected" : ""}>${esc(e)}</option>`).join("")}</select>
         <button class="btn" type="submit">Filtrar</button>
         <a class="btn s" href="${esc(base)}/export.csv">Descargar CSV</a>
       </form>
       <p class="muted">${total} ${q || estado ? "resultado(s)" : "en total"}</p>
-      <table><tr><th>Ref.</th><th>Fecha</th><th>Negocio</th><th>Contacto</th><th>Inversión</th><th>Estado</th></tr>
+      <table><tr><th>Ref.</th><th>Fecha</th><th>Cliente</th><th>Contacto</th><th>Inversión</th><th>Estado</th></tr>
       ${filas || '<tr><td colspan="6" class="muted">No hay respuestas.</td></tr>'}</table>
       ${nav}`, base));
   } catch (e) { console.error(e); res.status(500).send("Error del servidor"); }
@@ -243,6 +306,30 @@ panel.get("/export.csv", async (req, res) => {
   } catch (e) { console.error(e); res.status(500).send("Error del servidor"); }
 });
 
+panel.get("/:id/export.csv", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const b = id && await cargarBriefing(id);
+    if (!b) return res.status(404).send("No encontrado");
+    res.set("Content-Type", "text/csv; charset=utf-8");
+    res.set("Content-Disposition", `attachment; filename="${nombreArchivo(b.datos, id, "csv")}"`);
+    res.send(csvUno(id, b.creado, b.estado, b.datos));
+  } catch (e) { console.error(e); res.status(500).send("Error del servidor"); }
+});
+
+panel.get("/:id/export.pdf", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const b = id && await cargarBriefing(id);
+    if (!b) return res.status(404).send("No encontrado");
+    const doc = crearPdf(id, b.creado, b.estado, b.datos);
+    res.set("Content-Type", "application/pdf");
+    res.set("Content-Disposition", `attachment; filename="${nombreArchivo(b.datos, id, "pdf")}"`);
+    doc.pipe(res);
+    doc.end();
+  } catch (e) { console.error(e); if (!res.headersSent) res.status(500).send("Error del servidor"); }
+});
+
 panel.get("/:id", async (req, res) => {
   try {
     const base = req.baseUrl;
@@ -257,15 +344,16 @@ panel.get("/:id", async (req, res) => {
         const v = (datos[q.id] || "").trim();
         return `<dt>${esc(q.l)}</dt><dd class="${v ? "" : "vacio"}">${v ? esc(v) : "—"}</dd>`;
       }).join("")}</dl></section>`).join("");
-    res.send(page(`Briefing ${datos.marca || id}`, `
-      <h1>${esc(datos.marca || "Briefing")}</h1>
-      <p class="muted">Briefing comercial #${id} · ${esc(fecha(creado))} · ${esc(datos.nombre)} · ${tag(estado)}</p>
+    res.send(page(`Briefing ${datos.nombre || id}`, `
+      <h1>${esc(datos.nombre || "Briefing")}</h1>
+      <p class="muted">Briefing hogar #${id} · ${esc(fecha(creado))} · ${esc(datos.tel)} · ${tag(estado)}</p>
       <form method="post" action="${esc(base)}/${id}/estado" class="acciones">
         <a class="btn s" href="${esc(base)}">← Volver</a>
         <select class="campo" name="estado" aria-label="Estado">
           ${ESTADOS.map(e => `<option${e === estado ? " selected" : ""}>${esc(e)}</option>`).join("")}</select>
         <button class="btn" type="submit">Guardar estado</button>
-        <button class="btn s" type="button" onclick="window.print()">Imprimir / guardar PDF</button>
+        <a class="btn s" href="${esc(base)}/${id}/export.pdf">Descargar PDF</a>
+        <a class="btn s" href="${esc(base)}/${id}/export.csv">Descargar CSV</a>
       </form>
       ${secciones}`, base));
   } catch (e) { console.error(e); res.status(500).send("Error del servidor"); }
